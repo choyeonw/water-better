@@ -1,122 +1,139 @@
 import streamlit as st
+import numpy as np
+import pandas as pd
 
-# 앱 기본 설정
-st.set_page_config(
-    page_title="갑천 AI 수질 분석",
-    layout="centered"
-)
+from sklearn.ensemble import IsolationForest, RandomForestRegressor
+from sklearn.linear_model import LinearRegression
 
-# -------------------------
-# 가상 수질 센서 (AI 역할)
-# -------------------------
-def virtual_water_sensor(location, population, urban, green, sewage, rain):
-    bod = 2.0  # 기본 BOD 값
+# =========================
+# 1. 가상 수질 데이터 생성
+# =========================
+def generate_virtual_data(n=200):
+    np.random.seed(42)
+    data = pd.DataFrame({
+        "pH": np.random.normal(7.2, 0.5, n),
+        "turbidity": np.random.normal(15, 5, n),
+        "temperature": np.random.normal(18, 4, n),
+    })
 
-    if location == "하류":
-        bod += 1.5
+    # 가상의 수질 지표 (BOD 유사 개념)
+    data["water_index"] = (
+        0.4 * abs(data["pH"] - 7)
+        + 0.03 * data["turbidity"]
+        + 0.02 * data["temperature"]
+        + np.random.normal(0, 0.3, n)
+    )
+    return data
 
-    bod += population * 0.3
-    bod += urban * 0.4
-    bod -= green * 0.5
-    bod -= sewage * 0.4
-    bod += rain * 0.2
 
-    if bod < 3:
-        grade = "좋음"
-    elif bod < 6:
-        grade = "보통"
+# =========================
+# 2. AI 모델 클래스 정의
+# =========================
+class WaterQualityAI:
+    def __init__(self):
+        # 이상 탐지 모델
+        self.anomaly_model = IsolationForest(contamination=0.1, random_state=42)
+
+        # 예측 모델 (해석 가능한 회귀)
+        self.predict_model = RandomForestRegressor(random_state=42)
+
+        self.is_trained = False
+
+    def train(self, data: pd.DataFrame):
+        X = data[["pH", "turbidity", "temperature"]]
+        y = data["water_index"]
+
+        # 모델 학습
+        self.anomaly_model.fit(X)
+        self.predict_model.fit(X, y)
+
+        self.is_trained = True
+
+    def analyze(self, input_vector):
+        """
+        input_vector: [pH, turbidity, temperature]
+        """
+        X_input = np.array(input_vector).reshape(1, -1)
+
+        if not self.is_trained:
+            return {
+                "status": "모델이 아직 학습되지 않았습니다.",
+                "anomaly": "판단 불가",
+                "prediction": None
+            }
+
+        anomaly_score = self.anomaly_model.predict(X_input)[0]
+        prediction = self.predict_model.predict(X_input)[0]
+
+        return {
+            "status": "분석 완료",
+            "anomaly": "이상" if anomaly_score == -1 else "정상",
+            "prediction": round(prediction, 2)
+        }
+
+
+# =========================
+# 3. Streamlit UI
+# =========================
+st.set_page_config(page_title="갑천 AI 수질 분석 시스템", layout="centered")
+
+st.title("🌊 AI 기반 갑천 수질 분석·예측 시스템")
+st.write("""
+이 시스템은 **실제 센서 없이도 실행 가능한 AI 모델**을 기반으로  
+갑천의 수질 상태를 분석하고, 다음 시점의 수질 변화를 예측합니다.
+""")
+
+# AI 모델 준비
+ai = WaterQualityAI()
+
+# 가상 데이터 생성 & 학습
+virtual_data = generate_virtual_data()
+ai.train(virtual_data)
+
+# =========================
+# 4. 사용자 입력
+# =========================
+st.subheader("📥 수질 데이터 입력 (1시점)")
+
+pH = st.slider("pH", 4.0, 10.0, 7.0)
+turbidity = st.slider("탁도 (NTU)", 0.0, 50.0, 15.0)
+temperature = st.slider("수온 (℃)", 0.0, 35.0, 18.0)
+
+if st.button("🔍 AI 분석 실행"):
+    result = ai.analyze([pH, turbidity, temperature])
+
+    st.subheader("📊 분석 결과")
+
+    if result["prediction"] is None:
+        st.warning(result["status"])
     else:
-        grade = "나쁨"
+        st.write(f"**현재 수질 상태:** {result['anomaly']}")
+        st.write(f"**다음 시점 수질 예측 지표:** {result['prediction']}")
 
-    return round(bod, 2), grade
+        # 행동 제안
+        st.subheader("🌱 수질 보호 행동 제안")
 
-# -------------------------
-# 수질 문제 원인 분석
-# -------------------------
-def analyze_problem(population, urban, green, sewage, rain):
-    problems = []
+        if result["anomaly"] == "이상":
+            st.error("""
+- 생활하수 및 오염원 유입 가능성 증가  
+- 상류 쓰레기 관리 및 하수 처리 점검 필요  
+- 지역 주민 참여 하천 정화 활동 권장
+""")
+        else:
+            st.success("""
+- 현재 수질은 비교적 안정적  
+- 정기 모니터링 유지  
+- 생태 보전 중심의 하천 이용 필요
+""")
 
-    if population >= 3:
-        problems.append("생활하수 증가로 인한 유기물 오염")
-
-    if urban >= 3:
-        problems.append("도시화로 인한 비점오염원 유입")
-
-    if green <= 2:
-        problems.append("강변 녹지 부족으로 정화 능력 저하")
-
-    if sewage <= 2:
-        problems.append("하수처리 효율 부족")
-
-    if rain >= 3:
-        problems.append("강우 시 오염물 유입 증가")
-
-    return problems
-
-# -------------------------
-# 행동 가이드 생성
-# -------------------------
-def action_guide(problems):
-    actions = []
-
-    if "생활하수 증가로 인한 유기물 오염" in problems:
-        actions.append("생활하수 절약 및 하수처리 시설 관리 강화")
-
-    if "도시화로 인한 비점오염원 유입" in problems:
-        actions.append("빗물 정화 시설 확대 및 도로 오염 관리")
-
-    if "강변 녹지 부족으로 정화 능력 저하" in problems:
-        actions.append("강변 녹지 확충 및 생태 복원 활동 추진")
-
-    if "하수처리 효율 부족" in problems:
-        actions.append("하수 처리 시스템 개선 및 점검 강화")
-
-    if "강우 시 오염물 유입 증가" in problems:
-        actions.append("비점오염 저감 시설 설치 및 관리 강화")
-
-    return actions
-
-# -------------------------
-# 앱 화면 구성
-# -------------------------
-st.title("🌊 AI 기반 갑천 가상 수질 센서")
-st.write(
-    "환경 요인을 입력하면 갑천의 수질 상태를 예측하고, "
-    "오염 원인과 수질 보호를 위한 행동을 안내합니다."
-)
-
-st.subheader("① 지역 환경 정보 입력")
-
-location = st.selectbox("측정 위치 선택", ["상류", "하류"])
-
-population = st.slider("인구 밀도 (낮음 → 높음)", 1, 5, 3)
-urban = st.slider("도시화 비율", 1, 5, 3)
-green = st.slider("강변 녹지 비율", 1, 5, 3)
-sewage = st.slider("하수 처리 수준", 1, 5, 3)
-rain = st.slider("최근 강수량", 1, 5, 3)
-
-# -------------------------
-# 분석 실행
-# -------------------------
-if st.button("수질 분석하기"):
-    bod, grade = virtual_water_sensor(
-        location, population, urban, green, sewage, rain
-    )
-
-    problems = analyze_problem(
-        population, urban, green, sewage, rain
-    )
-
-    actions = action_guide(problems)
-
-    st.subheader("② 수질 예측 결과")
-    st.write(f"• 예상 BOD 수치: **{bod}**")
-    st.write(f"• 종합 수질 등급: **{grade}**")
-
-    st.subheader("③ 현재 수질 문제 분석")
-    for p in problems:
-        st.write("⚠️ " + p)
-
-    st.subheader("④ 수질 보호를 위한 행동 제안")
-    for a in actions:
-        st.write("🌱 " + a)
+# =========================
+# 5. 프로젝트 의미
+# =========================
+st.markdown("---")
+st.subheader("📌 프로젝트 의의")
+st.write("""
+- 실제 센서 없이도 **AI 구조 설계 능력**을 증명  
+- 이상 탐지 + 예측 모델 분리 설계  
+- 향후 IoT 센서와 바로 연동 가능한 구조  
+- 학생·주민 참여형 환경 협력 모델로 확장 가능
+""")
